@@ -1,7 +1,12 @@
 from PIL import Image
 from PIL import ImageOps
+from flask_pymongo import PyMongo
+from bson.binary import Binary
+import datetime
+import threading
 from time import sleep
 import base64
+import _pickle as cPickle
 import numpy as np
 from io import BytesIO
 from flask import Flask, request, jsonify
@@ -11,8 +16,25 @@ import cv2
 
 
 app = Flask(__name__)
+app.config["MONGO_URI"] = "mongodb://localhost:27017/myDatabase"
+mongo = PyMongo(app)
+db = mongo.db
+cameras= db.cameras
+cameras.delete_many({})
 CORS(app)
-first = True
+
+
+def serializeFrame(frame):
+    return Binary(cPickle.dumps(frame, protocol=2))
+
+def addCamera(_id,name,background):
+    global db
+    global cameras
+    camera = {"_id": _id,
+            "name": name,
+            "background": serializeFrame(background),
+            "last_updated": datetime.datetime.utcnow()}
+    cameras.insert_one(camera)
 
 
 def processInitialFrame(image):
@@ -37,9 +59,7 @@ def saveIntruderImage(area,image):
     cv2.imwrite(filename, new)
 
 
-def checkForIntruder(new):
-    global background
-
+def checkForIntruder(new,background):
     delta = cv2.absdiff(background,new)
     threshold = cv2.threshold(delta, 30, 255, cv2.THRESH_BINARY)[1]
     (contours,_)=cv2.findContours(threshold,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -47,6 +67,7 @@ def checkForIntruder(new):
     for contour in contours:
         area = cv2.contourArea(contour)
         if(area > 15000):  #intruder detected
+            #saveIntruderImage(area,new)
             return True
 
     return False
@@ -54,20 +75,42 @@ def checkForIntruder(new):
 def soundAlarms():
      playsound('./alarm.mp3')
 
+def thread_voice_alert(name):
+    engine.say("Intruder Detected in"+name)
+    engine.runAndWait()
+
+
+def updateBackground(frame,_id):
+    global cameras
+    filter = { "_id": _id }
+    newBackground = { "$set": { "background": serializeFrame(frame),"last_updated": datetime.datetime.utcnow() } }
+    cameras.update_one(filter,newBackground)
+
 
 @app.route('/update', methods=['POST'])
 def update_screencap():
-    global first
-    global background
+    global cameras
     request_json = request.get_json()
     base64_string = request_json.get('base64_string')
+    _id = request_json.get('_id')
     frame = convertToImage(base64_string)
-    if first:
+    camera = cameras.find_one({'_id': _id})
+    name = request_json.get('name')
+    if camera is None:
         background = frame
-        first = False
+        addCamera(_id,name,frame)
+        print('Added new camera with name: '+ name +" to database.")
     else:
-         if(checkForIntruder(frame)):
-             soundAlarms()
-             return jsonify(Intruder = True)
+        background = cPickle.loads(camera['background'])
+        last_updated = camera['last_updated']
+        if(checkForIntruder(frame,background)):
+            t = threading.Thread(target=soundAlarms)
+            t.start()
+            print("Intruder detected in "+name+"!")
+            return jsonify(Intruder = True)
+        seconds_passed = (datetime.datetime.utcnow() - last_updated).seconds  #seconds since background was last updated
+        if( seconds_passed > 120):
+            updateBackground(frame,_id)
+            print('Background updated for camera: '+_id)
 
     return jsonify(Intruder = False)
