@@ -1,5 +1,4 @@
 from PIL import Image
-from PIL import ImageOps
 from flask_pymongo import PyMongo
 from bson.binary import Binary
 import datetime
@@ -44,7 +43,7 @@ def processInitialFrame(image):
 
 def base64ToImage(base64_string):   #transforms input base64_string into an image and crops out areas where movement will not occur
     imgdata = base64.b64decode(str(base64_string))
-    image = ImageOps.crop(Image.open(BytesIO(imgdata)),(300,50,150, 50))  # left, up, right, bottom
+    image = Image.open(BytesIO(imgdata))  # left, up, right, bottom
     return np.array(image)
 
 
@@ -52,8 +51,8 @@ def convertToImage(base64_string):
     return processInitialFrame(base64ToImage(base64_string))
 
 
-def saveIntruderImage(area,image):
-    filename = str(area)+".jpg"
+def saveIntruderImage(area,new,contour):
+    filename = "./intruders/"+str(area)+".jpg"
     (x, y, w, h)=cv2.boundingRect(contour)
     cv2.rectangle(new, (x, y), (x+w, y+h), (0,255,0), 1)
     cv2.imwrite(filename, new)
@@ -66,8 +65,8 @@ def checkForIntruder(new,background):
 
     for contour in contours:
         area = cv2.contourArea(contour)
-        if(area > 15000):  #intruder detected
-            #saveIntruderImage(area,new)
+        if(area > 20000):  #intruder detected
+            saveIntruderImage(area,new,contour)
             return True
 
     return False
@@ -76,7 +75,7 @@ def soundAlarms():
      playsound('./alarm.mp3')
 
 def thread_voice_alert(name):
-    engine.say("Intruder Detected in"+name)
+    engine.say("Intruder Detected in \""+name+"\".")
     engine.runAndWait()
 
 
@@ -99,7 +98,7 @@ def update_screencap():
     if camera is None:
         background = frame
         addCamera(_id,name,frame)
-        print('Added new camera with name: '+ name +" to database.")
+        print('Added new camera with name: \"'+ name +"\" to database.")
     else:
         background = cPickle.loads(camera['background'])
         last_updated = camera['last_updated']
@@ -111,6 +110,6 @@ def update_screencap():
         seconds_passed = (datetime.datetime.utcnow() - last_updated).seconds  #seconds since background was last updated
         if( seconds_passed > 120):
             updateBackground(frame,_id)
-            print('Background updated for camera: '+_id)
+            print('Background updated for camera: \"'+name+"\".")
 
     return jsonify(Intruder = False)
