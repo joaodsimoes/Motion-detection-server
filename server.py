@@ -33,7 +33,10 @@ def addCamera(_id,name,background):
             "name": name,
             "background": serializeFrame(background),
             "last_updated": datetime.datetime.utcnow()}
-    cameras.insert_one(camera)
+    try:
+        cameras.insert_one(camera)
+    except pymongo.errors.DuplicateKeyError:
+        pass
 
 
 def processInitialFrame(image):
@@ -66,17 +69,13 @@ def checkForIntruder(new,background):
     for contour in contours:
         area = cv2.contourArea(contour)
         if(area > 20000):  #intruder detected
-            saveIntruderImage(area,new,contour)
+            #saveIntruderImage(area,new,contour)
             return True
 
     return False
 
 def soundAlarms():
      playsound('./alarm.mp3')
-
-def thread_voice_alert(name):
-    engine.say("Intruder Detected in \""+name+"\".")
-    engine.runAndWait()
 
 
 def updateBackground(frame,_id):
@@ -86,6 +85,25 @@ def updateBackground(frame,_id):
     cameras.update_one(filter,newBackground)
 
 
+def newFrame(camera,frame,name,_id):
+    background = cPickle.loads(camera['background'])
+    last_updated = camera['last_updated']
+
+    if(checkForIntruder(frame,background)):
+        t = threading.Thread(target=soundAlarms)
+        t.start()
+        print("Intruder detected in "+name+"!")
+        return jsonify(Intruder = True)
+
+    seconds_passed = (datetime.datetime.utcnow() - last_updated).seconds  #seconds since background was last updated
+    if( seconds_passed > 120):
+        updateBackground(frame,_id)
+        print('Background updated for camera: \"'+name+"\".")
+    
+    return jsonify(Intruder = False)
+
+
+#mudar para try catch
 @app.route('/update', methods=['POST'])
 def update_screencap():
     global cameras
@@ -95,21 +113,10 @@ def update_screencap():
     frame = convertToImage(base64_string)
     camera = cameras.find_one({'_id': _id})
     name = request_json.get('name')
+
     if camera is None:
-        background = frame
         addCamera(_id,name,frame)
         print('Added new camera with name: \"'+ name +"\" to database.")
+        return 'Added frame as background'
     else:
-        background = cPickle.loads(camera['background'])
-        last_updated = camera['last_updated']
-        if(checkForIntruder(frame,background)):
-            t = threading.Thread(target=soundAlarms)
-            t.start()
-            print("Intruder detected in "+name+"!")
-            return jsonify(Intruder = True)
-        seconds_passed = (datetime.datetime.utcnow() - last_updated).seconds  #seconds since background was last updated
-        if( seconds_passed > 120):
-            updateBackground(frame,_id)
-            print('Background updated for camera: \"'+name+"\".")
-
-    return jsonify(Intruder = False)
+       return newFrame(camera,frame,name,_id)
